@@ -30,10 +30,12 @@ export async function getOrCreateDeviceToken(req, res, next) {
       });
 
       // Set HttpOnly cookie (expires in 1 year)
+      // For Vercel/production: use sameSite: "none" and secure: true for cross-origin support
+      const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL;
       res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production", // HTTPS only in production
-        sameSite: "lax",
+        secure: isProduction, // HTTPS only in production
+        sameSite: isProduction ? "none" : "lax", // "none" required for cross-origin cookies
         maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
         path: "/",
       });
@@ -43,16 +45,18 @@ export async function getOrCreateDeviceToken(req, res, next) {
       
       if (!deviceTokenRecord) {
         // Token in cookie but not in DB - create new one
-        token = uuidv4();
+        token = crypto.randomUUID();
         await DeviceToken.create({
           token,
           searchCount: 0,
         });
         
+        // For Vercel/production: use sameSite: "none" and secure: true for cross-origin support
+        const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL;
         res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, {
           httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "lax",
+          secure: isProduction, // HTTPS only in production
+          sameSite: isProduction ? "none" : "lax", // "none" required for cross-origin cookies
           maxAge: 365 * 24 * 60 * 60 * 1000,
           path: "/",
         });
