@@ -19,10 +19,15 @@ export async function getOrCreateDeviceToken(req, res, next) {
     // Try to get token from cookie
     let token = req.cookies?.[DEVICE_TOKEN_COOKIE_NAME];
 
+    // Debug logging for incognito mode issues
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[DeviceToken] Cookie received: ${token ? "YES" : "NO"}`);
+    }
+
     // If no token in cookie, generate a new one
     if (!token) {
       token = crypto.randomUUID();
-      
+
       // Create device token record in database
       await DeviceToken.create({
         token,
@@ -30,23 +35,26 @@ export async function getOrCreateDeviceToken(req, res, next) {
       });
 
       // Set HttpOnly cookie (expires in 1 year)
-      // For Vercel/production: use sameSite: "none" and secure: true for cross-origin support
-      const isProduction = process.env.NODE_ENV === "production" || 
-                          process.env.VERCEL || 
-                          req.protocol === "https" ||
-                          req.headers["x-forwarded-proto"] === "https";
-      res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, {
+      // Use sameSite: "lax" for better incognito mode compatibility
+      const cookieOptions = {
         httpOnly: true,
-        secure: isProduction, // HTTPS only in production
-        sameSite: isProduction ? "none" : "lax", // "none" required for cross-origin cookies
+        secure: process.env.NODE_ENV === "production", // HTTPS only in production
+        sameSite: "lax", // Works better in incognito mode than "strict"
         maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
         path: "/",
-        // Don't set domain - let browser handle it automatically for cross-origin
-      });
+      };
+      res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, cookieOptions);
+
+      // Debug logging
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          `[DeviceToken] Created new token: ${token.substring(0, 8)}...`
+        );
+      }
     } else {
       // Verify token exists in database
       const deviceTokenRecord = await DeviceToken.findOne({ token });
-      
+
       if (!deviceTokenRecord) {
         // Token in cookie but not in DB - create new one
         token = crypto.randomUUID();
@@ -54,19 +62,13 @@ export async function getOrCreateDeviceToken(req, res, next) {
           token,
           searchCount: 0,
         });
-        
-        // For Vercel/production: use sameSite: "none" and secure: true for cross-origin support
-        const isProduction = process.env.NODE_ENV === "production" || 
-                            process.env.VERCEL || 
-                            req.protocol === "https" ||
-                            req.headers["x-forwarded-proto"] === "https";
+
         res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, {
           httpOnly: true,
-          secure: isProduction, // HTTPS only in production
-          sameSite: isProduction ? "none" : "lax", // "none" required for cross-origin cookies
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
           maxAge: 365 * 24 * 60 * 60 * 1000,
           path: "/",
-          // Don't set domain - let browser handle it automatically for cross-origin
         });
       }
     }
@@ -92,12 +94,15 @@ export async function checkSearchLimit(deviceToken) {
 
   try {
     const deviceTokenRecord = await DeviceToken.findOne({ token: deviceToken });
-    
+
     if (!deviceTokenRecord) {
       return { canSearch: false, remaining: 0 };
     }
 
-    const remaining = Math.max(0, MAX_FREE_SEARCHES - deviceTokenRecord.searchCount);
+    const remaining = Math.max(
+      0,
+      MAX_FREE_SEARCHES - deviceTokenRecord.searchCount
+    );
     const canSearch = remaining > 0;
 
     return { canSearch, remaining };
@@ -127,4 +132,3 @@ export async function incrementSearchCount(deviceToken) {
     console.error("Error incrementing search count:", error);
   }
 }
-

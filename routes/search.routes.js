@@ -487,10 +487,25 @@ router.get("/search/remaining", async (req, res) => {
 
         if (!deviceTokenRecord) {
           // Token doesn't exist yet - return max free searches
+          if (process.env.NODE_ENV !== "production") {
+            console.log(
+              `[Remaining] Token ${req.deviceToken.substring(
+                0,
+                8
+              )}... not found in DB`
+            );
+          }
           return res.json({ remaining: 6, unlimited: false });
         }
 
         const remaining = Math.max(0, 6 - (deviceTokenRecord.searchCount || 0));
+        if (process.env.NODE_ENV !== "production") {
+          console.log(
+            `[Remaining] Token ${req.deviceToken.substring(0, 8)}... has ${
+              deviceTokenRecord.searchCount
+            } searches, remaining: ${remaining}`
+          );
+        }
         return res.json({ remaining, unlimited: false });
       } catch (dbError) {
         console.error("Database error getting remaining searches:", dbError);
@@ -500,6 +515,9 @@ router.get("/search/remaining", async (req, res) => {
     }
 
     // No device token yet - return max free searches
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Remaining] No device token found in request");
+    }
     return res.json({ remaining: 6, unlimited: false });
   } catch (error) {
     console.error("Error getting remaining searches:", error);
