@@ -31,13 +31,17 @@ export async function getOrCreateDeviceToken(req, res, next) {
 
       // Set HttpOnly cookie (expires in 1 year)
       // For Vercel/production: use sameSite: "none" and secure: true for cross-origin support
-      const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL;
+      const isProduction = process.env.NODE_ENV === "production" || 
+                          process.env.VERCEL || 
+                          req.protocol === "https" ||
+                          req.headers["x-forwarded-proto"] === "https";
       res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, {
         httpOnly: true,
         secure: isProduction, // HTTPS only in production
         sameSite: isProduction ? "none" : "lax", // "none" required for cross-origin cookies
         maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
         path: "/",
+        // Don't set domain - let browser handle it automatically for cross-origin
       });
     } else {
       // Verify token exists in database
@@ -52,13 +56,17 @@ export async function getOrCreateDeviceToken(req, res, next) {
         });
         
         // For Vercel/production: use sameSite: "none" and secure: true for cross-origin support
-        const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL;
+        const isProduction = process.env.NODE_ENV === "production" || 
+                            process.env.VERCEL || 
+                            req.protocol === "https" ||
+                            req.headers["x-forwarded-proto"] === "https";
         res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, {
           httpOnly: true,
           secure: isProduction, // HTTPS only in production
           sameSite: isProduction ? "none" : "lax", // "none" required for cross-origin cookies
           maxAge: 365 * 24 * 60 * 60 * 1000,
           path: "/",
+          // Don't set domain - let browser handle it automatically for cross-origin
         });
       }
     }

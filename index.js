@@ -25,13 +25,33 @@ dotenv.config();
 
 const app = express();
 
+// Trust proxy - Required for Vercel to correctly detect HTTPS and get real client IP
+// Vercel uses a reverse proxy, so we need to trust the X-Forwarded-* headers
+app.set("trust proxy", 1);
 
-app.use(cors({
-  origin: true,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
+// CORS configuration optimized for cross-origin cookies on Vercel
+app.use(
+  cors({
+    origin: true, // Allow all origins (you can restrict this in production)
+    credentials: true, // CRITICAL: Must be true for cookies to work cross-origin
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Cookie",
+    ],
+    exposedHeaders: ["Set-Cookie"], // Expose Set-Cookie header
+    optionsSuccessStatus: 200,
+  })
+);
+
+// Middleware to ensure proper headers for cookie handling
+app.use((req, res, next) => {
+  // Ensure Access-Control-Allow-Credentials is set
+  res.header("Access-Control-Allow-Credentials", "true");
+  next();
+});
 
 app.use(cookieParser());
 app.use(express.json());
