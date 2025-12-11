@@ -11,7 +11,11 @@ import {
   calculateExpertMatch,
 } from "../services/matching.service.js";
 import { Profile } from "../models/Profile.js";
-import { checkSearchLimit, incrementSearchCount } from "../middleware/deviceToken.js";
+import {
+  checkSearchLimit,
+  incrementSearchCount,
+} from "../middleware/deviceToken.js";
+import { DeviceToken } from "../models/DeviceToken.js";
 
 const router = Router();
 
@@ -22,7 +26,8 @@ router.get("/search/trials", async (req, res) => {
       const { canSearch, remaining } = await checkSearchLimit(req.deviceToken);
       if (!canSearch) {
         return res.status(429).json({
-          error: "You've used all your free searches! Sign in to continue searching.",
+          error:
+            "You've used all your free searches! Sign in to continue searching.",
           remaining: 0,
           results: [],
         });
@@ -94,9 +99,9 @@ router.get("/search/trials", async (req, res) => {
       remaining = limitCheck.remaining;
     }
 
-    res.json({ 
+    res.json({
       results: sortedResults,
-      ...(remaining !== null && { remaining }) 
+      ...(remaining !== null && { remaining }),
     });
   } catch (error) {
     console.error("Error searching trials:", error);
@@ -111,7 +116,8 @@ router.get("/search/publications", async (req, res) => {
       const { canSearch, remaining } = await checkSearchLimit(req.deviceToken);
       if (!canSearch) {
         return res.status(429).json({
-          error: "You've used all your free searches! Sign in to continue searching.",
+          error:
+            "You've used all your free searches! Sign in to continue searching.",
           remaining: 0,
           results: [],
         });
@@ -183,9 +189,9 @@ router.get("/search/publications", async (req, res) => {
       remaining = limitCheck.remaining;
     }
 
-    res.json({ 
+    res.json({
       results: resultsWithMatch,
-      ...(remaining !== null && { remaining }) 
+      ...(remaining !== null && { remaining }),
     });
   } catch (error) {
     console.error("Error searching publications:", error);
@@ -202,7 +208,8 @@ router.get("/search/experts", async (req, res) => {
       const { canSearch, remaining } = await checkSearchLimit(req.deviceToken);
       if (!canSearch) {
         return res.status(429).json({
-          error: "You've used all your free searches! Sign in to continue searching.",
+          error:
+            "You've used all your free searches! Sign in to continue searching.",
           remaining: 0,
           results: [],
         });
@@ -367,9 +374,9 @@ router.get("/search/experts", async (req, res) => {
       remaining = limitCheck.remaining;
     }
 
-    res.json({ 
+    res.json({
       results: resultsWithMatch,
-      ...(remaining !== null && { remaining }) 
+      ...(remaining !== null && { remaining }),
     });
   } catch (error) {
     console.error("Error searching experts:", error);
@@ -462,24 +469,42 @@ router.get("/expert/profile", async (req, res) => {
 });
 
 // Endpoint to get remaining searches for anonymous users
+// Optimized with lean() query and early returns
 router.get("/search/remaining", async (req, res) => {
   try {
-    // Authenticated users have unlimited searches
+    // Authenticated users have unlimited searches - return immediately
     if (req.user) {
       return res.json({ remaining: null, unlimited: true });
     }
 
     // Check remaining searches for anonymous users
     if (req.deviceToken) {
-      const { remaining } = await checkSearchLimit(req.deviceToken);
-      return res.json({ remaining, unlimited: false });
+      // Use lean() for faster query (returns plain JS object instead of Mongoose document)
+      try {
+        const deviceTokenRecord = await DeviceToken.findOne({
+          token: req.deviceToken,
+        }).lean();
+
+        if (!deviceTokenRecord) {
+          // Token doesn't exist yet - return max free searches
+          return res.json({ remaining: 6, unlimited: false });
+        }
+
+        const remaining = Math.max(0, 6 - (deviceTokenRecord.searchCount || 0));
+        return res.json({ remaining, unlimited: false });
+      } catch (dbError) {
+        console.error("Database error getting remaining searches:", dbError);
+        // Fallback to max searches on error
+        return res.json({ remaining: 6, unlimited: false });
+      }
     }
 
     // No device token yet - return max free searches
     return res.json({ remaining: 6, unlimited: false });
   } catch (error) {
     console.error("Error getting remaining searches:", error);
-    return res.status(500).json({ error: "Failed to get remaining searches" });
+    // Return default instead of error to prevent UI issues
+    return res.json({ remaining: 6, unlimited: false });
   }
 });
 
