@@ -41,7 +41,10 @@ router.get("/search/trials", async (req, res) => {
 
       // Check device token limit if available
       if (req.deviceToken) {
-        const { canSearch, remaining } = await checkSearchLimit(req.deviceToken, req);
+        const { canSearch, remaining } = await checkSearchLimit(
+          req.deviceToken,
+          req
+        );
         if (!canSearch) {
           return res.status(429).json({
             error:
@@ -58,12 +61,14 @@ router.get("/search/trials", async (req, res) => {
     const results = await searchClinicalTrials({ q, status, location });
 
     // Increment search count for anonymous users after successful search (both device token and IP)
+    // incrementSearchCount handles both device token and IP incrementing
     if (!req.user) {
-      // Always increment IP count for anonymous users
-      await incrementIPSearchCount(req);
-      // Increment device token count if available
       if (req.deviceToken) {
+        // This increments both device token AND IP count
         await incrementSearchCount(req.deviceToken, req);
+      } else {
+        // If no device token, only increment IP count
+        await incrementIPSearchCount(req);
       }
     }
 
@@ -122,13 +127,13 @@ router.get("/search/trials", async (req, res) => {
       // Check IP limit
       const ipLimitCheck = await checkIPSearchLimit(req);
       let deviceTokenRemaining = MAX_FREE_SEARCHES;
-      
+
       // Check device token limit if available
       if (req.deviceToken) {
         const deviceTokenCheck = await checkSearchLimit(req.deviceToken, req);
         deviceTokenRemaining = deviceTokenCheck.remaining;
       }
-      
+
       // Take the minimum of both limits
       remaining = Math.min(ipLimitCheck.remaining, deviceTokenRemaining);
     }
@@ -160,7 +165,10 @@ router.get("/search/publications", async (req, res) => {
 
       // Check device token limit if available
       if (req.deviceToken) {
-        const { canSearch, remaining } = await checkSearchLimit(req.deviceToken, req);
+        const { canSearch, remaining } = await checkSearchLimit(
+          req.deviceToken,
+          req
+        );
         if (!canSearch) {
           return res.status(429).json({
             error:
@@ -182,12 +190,14 @@ router.get("/search/publications", async (req, res) => {
     const results = await searchPubMed({ q: pubmedQuery });
 
     // Increment search count for anonymous users after successful search (both device token and IP)
+    // incrementSearchCount handles both device token and IP incrementing
     if (!req.user) {
-      // Always increment IP count for anonymous users
-      await incrementIPSearchCount(req);
-      // Increment device token count if available
       if (req.deviceToken) {
+        // This increments both device token AND IP count
         await incrementSearchCount(req.deviceToken, req);
+      } else {
+        // If no device token, only increment IP count
+        await incrementIPSearchCount(req);
       }
     }
 
@@ -241,13 +251,13 @@ router.get("/search/publications", async (req, res) => {
       // Check IP limit
       const ipLimitCheck = await checkIPSearchLimit(req);
       let deviceTokenRemaining = MAX_FREE_SEARCHES;
-      
+
       // Check device token limit if available
       if (req.deviceToken) {
         const deviceTokenCheck = await checkSearchLimit(req.deviceToken, req);
         deviceTokenRemaining = deviceTokenCheck.remaining;
       }
-      
+
       // Take the minimum of both limits
       remaining = Math.min(ipLimitCheck.remaining, deviceTokenRemaining);
     }
@@ -281,7 +291,10 @@ router.get("/search/experts", async (req, res) => {
 
       // Check device token limit if available
       if (req.deviceToken) {
-        const { canSearch, remaining } = await checkSearchLimit(req.deviceToken, req);
+        const { canSearch, remaining } = await checkSearchLimit(
+          req.deviceToken,
+          req
+        );
         if (!canSearch) {
           return res.status(429).json({
             error:
@@ -351,12 +364,14 @@ router.get("/search/experts", async (req, res) => {
     const experts = await findResearchersWithGemini(expertsQuery);
 
     // Increment search count for anonymous users after successful search (both device token and IP)
+    // incrementSearchCount handles both device token and IP incrementing
     if (!req.user) {
-      // Always increment IP count for anonymous users
-      await incrementIPSearchCount(req);
-      // Increment device token count if available
       if (req.deviceToken) {
+        // This increments both device token AND IP count
         await incrementSearchCount(req.deviceToken, req);
+      } else {
+        // If no device token, only increment IP count
+        await incrementIPSearchCount(req);
       }
     }
 
@@ -455,13 +470,13 @@ router.get("/search/experts", async (req, res) => {
       // Check IP limit
       const ipLimitCheck = await checkIPSearchLimit(req);
       let deviceTokenRemaining = MAX_FREE_SEARCHES;
-      
+
       // Check device token limit if available
       if (req.deviceToken) {
         const deviceTokenCheck = await checkSearchLimit(req.deviceToken, req);
         deviceTokenRemaining = deviceTokenCheck.remaining;
       }
-      
+
       // Take the minimum of both limits
       remaining = Math.min(ipLimitCheck.remaining, deviceTokenRemaining);
     }
@@ -574,13 +589,13 @@ router.get("/search/remaining", async (req, res) => {
       // Check IP limit
       const ipLimitCheck = await checkIPSearchLimit(req);
       let deviceTokenRemaining = MAX_FREE_SEARCHES;
-      
+
       // Check device token limit if available
       if (req.deviceToken) {
         const deviceTokenCheck = await checkSearchLimit(req.deviceToken, req);
         deviceTokenRemaining = deviceTokenCheck.remaining;
       }
-      
+
       // Take the minimum of both limits
       const remaining = Math.min(ipLimitCheck.remaining, deviceTokenRemaining);
       return res.json({ remaining, unlimited: false });
