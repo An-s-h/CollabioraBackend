@@ -18,9 +18,11 @@ import {
   incrementIPSearchCount,
 } from "../middleware/deviceToken.js";
 
-// Import MAX_FREE_SEARCHES constant
-const MAX_FREE_SEARCHES = 6;
 import { DeviceToken } from "../models/DeviceToken.js";
+import { IPLimit } from "../models/IPLimit.js";
+
+// Import MAX_FREE_SEARCHES constant (from environment or default to 6)
+const MAX_FREE_SEARCHES = parseInt(process.env.MAX_FREE_SEARCHES || "6", 10);
 
 const router = Router();
 
@@ -61,13 +63,12 @@ router.get("/search/trials", async (req, res) => {
     const results = await searchClinicalTrials({ q, status, location });
 
     // Increment search count for anonymous users after successful search (both device token and IP)
-    // incrementSearchCount handles both device token and IP incrementing
     if (!req.user) {
+      // Increment both device token and IP counts (incrementSearchCount handles both)
       if (req.deviceToken) {
-        // This increments both device token AND IP count
         await incrementSearchCount(req.deviceToken, req);
       } else {
-        // If no device token, only increment IP count
+        // If no device token, just increment IP count
         await incrementIPSearchCount(req);
       }
     }
@@ -190,13 +191,12 @@ router.get("/search/publications", async (req, res) => {
     const results = await searchPubMed({ q: pubmedQuery });
 
     // Increment search count for anonymous users after successful search (both device token and IP)
-    // incrementSearchCount handles both device token and IP incrementing
     if (!req.user) {
+      // Increment both device token and IP counts (incrementSearchCount handles both)
       if (req.deviceToken) {
-        // This increments both device token AND IP count
         await incrementSearchCount(req.deviceToken, req);
       } else {
-        // If no device token, only increment IP count
+        // If no device token, just increment IP count
         await incrementIPSearchCount(req);
       }
     }
@@ -364,13 +364,12 @@ router.get("/search/experts", async (req, res) => {
     const experts = await findResearchersWithGemini(expertsQuery);
 
     // Increment search count for anonymous users after successful search (both device token and IP)
-    // incrementSearchCount handles both device token and IP incrementing
     if (!req.user) {
+      // Increment both device token and IP counts (incrementSearchCount handles both)
       if (req.deviceToken) {
-        // This increments both device token AND IP count
         await incrementSearchCount(req.deviceToken, req);
       } else {
-        // If no device token, only increment IP count
+        // If no device token, just increment IP count
         await incrementIPSearchCount(req);
       }
     }
@@ -607,7 +606,42 @@ router.get("/search/remaining", async (req, res) => {
   } catch (error) {
     console.error("Error getting remaining searches:", error);
     // Return default instead of error to prevent UI issues
-    return res.json({ remaining: 6, unlimited: false });
+    return res.json({ remaining: MAX_FREE_SEARCHES, unlimited: false });
+  }
+});
+
+// ============================================
+// TESTING ENDPOINT (Development Only)
+// ============================================
+// Quick reset endpoint for testing - only works in development
+// Usage: POST /api/search/reset-for-testing
+router.post("/search/reset-for-testing", async (req, res) => {
+  // Only allow in development mode
+  if (process.env.NODE_ENV === "production") {
+    return res
+      .status(403)
+      .json({ error: "This endpoint is disabled in production" });
+  }
+
+  try {
+    const [deviceResult, ipResult] = await Promise.all([
+      DeviceToken.updateMany(
+        {},
+        { $set: { searchCount: 0, lastSearchAt: null } }
+      ),
+      IPLimit.updateMany({}, { $set: { searchCount: 0, lastSearchAt: null } }),
+    ]);
+
+    res.json({
+      success: true,
+      message: "Reset all search limits for testing",
+      deviceTokensReset: deviceResult.modifiedCount,
+      ipLimitsReset: ipResult.modifiedCount,
+      note: "This endpoint only works in development mode",
+    });
+  } catch (error) {
+    console.error("Error resetting search limits for testing:", error);
+    res.status(500).json({ error: "Failed to reset search limits" });
   }
 });
 
