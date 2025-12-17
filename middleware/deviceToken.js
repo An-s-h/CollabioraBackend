@@ -56,7 +56,7 @@ export function getClientIP(req) {
  * Hash IP address for privacy
  * Uses SHA-256 with a salt for additional security
  */
-function hashIP(ip) {
+export function hashIP(ip) {
   if (!ip) {
     return null;
   }
@@ -113,9 +113,9 @@ export async function getOrCreateDeviceToken(req, res, next) {
           // Set cookie for this request too
           const cookieOptions = {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "lax",
-            maxAge: 365 * 24 * 60 * 60 * 1000,
+            secure: true, // REQUIRED for cross-origin (sameSite: "none")
+            sameSite: "none", // REQUIRED for cross-origin cookies
+            maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
             path: "/",
           };
           res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, cookieOptions);
@@ -185,11 +185,11 @@ export async function getOrCreateDeviceToken(req, res, next) {
       }
 
       // Set HttpOnly cookie (expires in 1 year)
-      // Use sameSite: "lax" for better incognito mode compatibility
+      // Use sameSite: "none" and secure: true for cross-origin support (required on Vercel)
       const cookieOptions = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production", // HTTPS only in production
-        sameSite: "lax", // Works better in incognito mode than "strict"
+        secure: true, // REQUIRED for cross-origin (sameSite: "none")
+        sameSite: "none", // REQUIRED for cross-origin cookies
         maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
         path: "/",
       };
@@ -208,9 +208,9 @@ export async function getOrCreateDeviceToken(req, res, next) {
 
         res.cookie(DEVICE_TOKEN_COOKIE_NAME, token, {
           httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "lax",
-          maxAge: 365 * 24 * 60 * 60 * 1000,
+          secure: true, // REQUIRED for cross-origin (sameSite: "none")
+          sameSite: "none", // REQUIRED for cross-origin cookies
+          maxAge: 365 * 24 * 60 * 60 * 1000, // 1 year
           path: "/",
         });
       }
@@ -294,13 +294,11 @@ export async function incrementIPSearchCount(req) {
 
 /**
  * Check if anonymous user can perform a search
- * Checks both device token and IP limits
+ * PRIORITY: deviceToken first, then fallback to IP
  * Returns { canSearch: boolean, remaining: number }
  */
 export async function checkSearchLimit(deviceToken, req = null) {
-  // Check device token limit first
-  let deviceTokenResult = { canSearch: false, remaining: 0 };
-
+  // PRIORITY 1: If deviceToken exists → trust it (primary identifier)
   if (deviceToken) {
     try {
       const deviceTokenRecord = await DeviceToken.findOne({
@@ -312,35 +310,33 @@ export async function checkSearchLimit(deviceToken, req = null) {
           0,
           MAX_FREE_SEARCHES - deviceTokenRecord.searchCount
         );
-        deviceTokenResult = {
+        return {
           canSearch: remaining > 0,
           remaining,
         };
       }
     } catch (error) {
       console.error("Error checking device token search limit:", error);
+      // Fall through to IP fallback on error
     }
   }
 
-  // Check IP limit if request is provided
-  let ipResult = { canSearch: true, remaining: MAX_FREE_SEARCHES };
+  // PRIORITY 2: Fallback to IP only if no deviceToken
   if (req) {
-    ipResult = await checkIPSearchLimit(req);
+    return await checkIPSearchLimit(req);
   }
 
-  // User can search only if BOTH limits allow it
-  // Take the minimum remaining count
-  const canSearch = deviceTokenResult.canSearch && ipResult.canSearch;
-  const remaining = Math.min(deviceTokenResult.remaining, ipResult.remaining);
-
-  return { canSearch, remaining };
+  // If no deviceToken and no request, allow (fail open)
+  return { canSearch: true, remaining: MAX_FREE_SEARCHES };
 }
 
 /**
- * Increment search count for a device token and IP address
+ * Increment search count for a device token or IP address
+ * PRIORITY: deviceToken first, then fallback to IP
+ * Only increments ONE record (never both)
  */
 export async function incrementSearchCount(deviceToken, req = null) {
-  // Increment device token count
+  // PRIORITY 1: If deviceToken exists → increment it (primary identifier)
   if (deviceToken) {
     try {
       await DeviceToken.findOneAndUpdate(
@@ -348,14 +344,17 @@ export async function incrementSearchCount(deviceToken, req = null) {
         {
           $inc: { searchCount: 1 },
           $set: { lastSearchAt: new Date() },
-        }
+        },
+        { upsert: false } // Don't create if doesn't exist (should already exist)
       );
+      return; // Exit early - don't increment IP
     } catch (error) {
       console.error("Error incrementing device token search count:", error);
+      // Fall through to IP fallback on error
     }
   }
 
-  // Increment IP count if request is provided
+  // PRIORITY 2: Fallback to IP only if no deviceToken
   if (req) {
     await incrementIPSearchCount(req);
   }
