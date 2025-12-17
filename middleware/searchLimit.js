@@ -431,4 +431,4 @@ export function searchLimitMiddleware(req, res, next) {
   next();
 }
 
-export { MAX_FREE_SEARCHES };
+export { MAX_FREE_SEARCHES }; 
