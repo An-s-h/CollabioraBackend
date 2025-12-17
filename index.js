@@ -40,6 +40,8 @@ app.use(
       "Authorization",
       "X-Requested-With",
       "Cookie",
+      "x-client-signal",    // Add this
+     "x-device-id"
     ],
     exposedHeaders: ["Set-Cookie"], // Expose Set-Cookie header
     optionsSuccessStatus: 200,
