@@ -51,7 +51,7 @@ export async function extractConditions(naturalLanguage) {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const result = await model.generateContent(
-      `Extract specific medical conditions/diseases from this patient description. Return ONLY a comma-separated list of condition names, no explanations: "${naturalLanguage}"`
+      `Extract specific medical conditions/diseases from this patient description. Convert symptoms to their corresponding medical conditions when appropriate (e.g., "high BP" or "high blood pressure" → "Hypertension", "chest pain" → consider "Heart Disease" or "Angina", "breathing issues" → consider "Asthma" or "COPD", "prostate issues" → consider "Prostate Cancer" if cancer-related). Return ONLY a comma-separated list of condition names (diagnoses), no explanations: "${naturalLanguage}"`
     );
     const text = result.response.text().trim();
     return text

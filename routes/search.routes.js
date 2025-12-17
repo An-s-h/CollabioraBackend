@@ -11,37 +11,30 @@ import {
   calculateExpertMatch,
 } from "../services/matching.service.js";
 import { Profile } from "../models/Profile.js";
+
+// New unified search limit system (fingerprint + deviceToken + IP)
 import {
   checkSearchLimit,
   incrementSearchCount,
-  checkIPSearchLimit,
-  incrementIPSearchCount,
-  getClientIP,
-  hashIP,
-} from "../middleware/deviceToken.js";
-
-import { DeviceToken } from "../models/DeviceToken.js";
-import { IPLimit } from "../models/IPLimit.js";
-
-// Import MAX_FREE_SEARCHES constant (from environment or default to 6)
-const MAX_FREE_SEARCHES = parseInt(process.env.MAX_FREE_SEARCHES || "6", 10);
+  getSearchLimitDebug,
+  MAX_FREE_SEARCHES,
+} from "../middleware/searchLimit.js";
 
 const router = Router();
 
 router.get("/search/trials", async (req, res) => {
   try {
-    // Check search limit for anonymous users (deviceToken first, then IP fallback)
+    // Check search limit for anonymous users (uses risk scoring)
     if (!req.user) {
-      const { canSearch, remaining } = await checkSearchLimit(
-        req.deviceToken,
-        req
-      );
-      if (!canSearch) {
+      const limitCheck = await checkSearchLimit(req);
+      if (!limitCheck.canSearch) {
         return res.status(429).json({
           error:
+            limitCheck.message ||
             "You've used all your free searches! Sign in to continue searching.",
           remaining: 0,
           results: [],
+          showSignUpPrompt: limitCheck.showSignUpPrompt,
         });
       }
     }
@@ -51,9 +44,9 @@ router.get("/search/trials", async (req, res) => {
     const results = await searchClinicalTrials({ q, status, location });
 
     // Increment search count for anonymous users after successful search
-    // Uses deviceToken first, then falls back to IP (only increments ONE record)
+    // Updates ALL identifiers (fingerprint, deviceToken, IP) with same count
     if (!req.user) {
-      await incrementSearchCount(req.deviceToken, req);
+      await incrementSearchCount(req);
     }
 
     // Build user profile for matching
@@ -105,10 +98,10 @@ router.get("/search/trials", async (req, res) => {
       .sort((a, b) => (b.matchPercentage || 0) - (a.matchPercentage || 0))
       .slice(0, 9);
 
-    // Get remaining searches for anonymous users (deviceToken first, then IP fallback)
+    // Get remaining searches for anonymous users
     let remaining = null;
     if (!req.user) {
-      const limitCheck = await checkSearchLimit(req.deviceToken, req);
+      const limitCheck = await checkSearchLimit(req);
       remaining = limitCheck.remaining;
     }
 
@@ -124,18 +117,17 @@ router.get("/search/trials", async (req, res) => {
 
 router.get("/search/publications", async (req, res) => {
   try {
-    // Check search limit for anonymous users (deviceToken first, then IP fallback)
+    // Check search limit for anonymous users (uses risk scoring)
     if (!req.user) {
-      const { canSearch, remaining } = await checkSearchLimit(
-        req.deviceToken,
-        req
-      );
-      if (!canSearch) {
+      const limitCheck = await checkSearchLimit(req);
+      if (!limitCheck.canSearch) {
         return res.status(429).json({
           error:
+            limitCheck.message ||
             "You've used all your free searches! Sign in to continue searching.",
           remaining: 0,
           results: [],
+          showSignUpPrompt: limitCheck.showSignUpPrompt,
         });
       }
     }
@@ -150,9 +142,9 @@ router.get("/search/publications", async (req, res) => {
     const results = await searchPubMed({ q: pubmedQuery });
 
     // Increment search count for anonymous users after successful search
-    // Uses deviceToken first, then falls back to IP (only increments ONE record)
+    // Updates ALL identifiers (fingerprint, deviceToken, IP) with same count
     if (!req.user) {
-      await incrementSearchCount(req.deviceToken, req);
+      await incrementSearchCount(req);
     }
 
     // Build user profile for matching
@@ -199,10 +191,10 @@ router.get("/search/publications", async (req, res) => {
         })
       : results;
 
-    // Get remaining searches for anonymous users (deviceToken first, then IP fallback)
+    // Get remaining searches for anonymous users
     let remaining = null;
     if (!req.user) {
-      const limitCheck = await checkSearchLimit(req.deviceToken, req);
+      const limitCheck = await checkSearchLimit(req);
       remaining = limitCheck.remaining;
     }
 
@@ -220,18 +212,17 @@ router.get("/search/publications", async (req, res) => {
 
 router.get("/search/experts", async (req, res) => {
   try {
-    // Check search limit for anonymous users (deviceToken first, then IP fallback)
+    // Check search limit for anonymous users (uses risk scoring)
     if (!req.user) {
-      const { canSearch, remaining } = await checkSearchLimit(
-        req.deviceToken,
-        req
-      );
-      if (!canSearch) {
+      const limitCheck = await checkSearchLimit(req);
+      if (!limitCheck.canSearch) {
         return res.status(429).json({
           error:
+            limitCheck.message ||
             "You've used all your free searches! Sign in to continue searching.",
           remaining: 0,
           results: [],
+          showSignUpPrompt: limitCheck.showSignUpPrompt,
         });
       }
     }
@@ -294,9 +285,9 @@ router.get("/search/experts", async (req, res) => {
     const experts = await findResearchersWithGemini(expertsQuery);
 
     // Increment search count for anonymous users after successful search
-    // Uses deviceToken first, then falls back to IP (only increments ONE record)
+    // Updates ALL identifiers (fingerprint, deviceToken, IP) with same count
     if (!req.user) {
-      await incrementSearchCount(req.deviceToken, req);
+      await incrementSearchCount(req);
     }
 
     // If no experts found and it might be due to overload, return a helpful message
@@ -388,10 +379,10 @@ router.get("/search/experts", async (req, res) => {
         })
       : experts;
 
-    // Get remaining searches for anonymous users (deviceToken first, then IP fallback)
+    // Get remaining searches for anonymous users
     let remaining = null;
     if (!req.user) {
-      const limitCheck = await checkSearchLimit(req.deviceToken, req);
+      const limitCheck = await checkSearchLimit(req);
       remaining = limitCheck.remaining;
     }
 
@@ -498,9 +489,9 @@ router.get("/search/remaining", async (req, res) => {
       return res.json({ remaining: null, unlimited: true });
     }
 
-    // Check remaining searches for anonymous users (deviceToken first, then IP fallback)
+    // Check remaining searches for anonymous users (uses combined fingerprint + deviceToken + IP)
     try {
-      const limitCheck = await checkSearchLimit(req.deviceToken, req);
+      const limitCheck = await checkSearchLimit(req);
       return res.json({ remaining: limitCheck.remaining, unlimited: false });
     } catch (dbError) {
       console.error("Database error getting remaining searches:", dbError);
@@ -517,81 +508,19 @@ router.get("/search/remaining", async (req, res) => {
 // ============================================
 // DEBUG ENDPOINT
 // ============================================
-// Debug endpoint to check deviceToken and IP status
+// Debug endpoint to check search limit status using risk scoring
 // Usage: GET /api/search/debug
 router.get("/search/debug", async (req, res) => {
   try {
-    const deviceToken = req.deviceToken || req.cookies?.device_token;
-    const clientIP = getClientIP(req);
-    const hashedIP = clientIP ? hashIP(clientIP) : null;
-
-    let deviceTokenPresent = false;
-    let cookieReceived = false;
-    let deviceTokenRecord = null;
-    let ipLimitRecord = null;
-    let searchCount = 0;
-
-    // Check if deviceToken cookie was received
-    cookieReceived = !!deviceToken;
-
-    // Check deviceToken record if token exists
-    if (deviceToken) {
-      deviceTokenPresent = true;
-      try {
-        deviceTokenRecord = await DeviceToken.findOne({ token: deviceToken });
-        if (deviceTokenRecord) {
-          searchCount = deviceTokenRecord.searchCount;
-        }
-      } catch (error) {
-        console.error("Error checking device token:", error);
-      }
-    }
-
-    // Check IP limit record if IP exists
-    if (hashedIP) {
-      try {
-        ipLimitRecord = await IPLimit.findOne({ hashedIP });
-        // If deviceToken not found, use IP count
-        if (!deviceTokenRecord && ipLimitRecord) {
-          searchCount = ipLimitRecord.searchCount;
-        }
-      } catch (error) {
-        console.error("Error checking IP limit:", error);
-      }
-    }
-
-    res.json({
-      deviceTokenPresent,
-      cookieReceived,
-      deviceToken: deviceToken ? `${deviceToken.substring(0, 8)}...` : null,
-      hashedIP: hashedIP ? `${hashedIP.substring(0, 16)}...` : null,
-      clientIP: clientIP ? `${clientIP.substring(0, 15)}...` : null,
-      searchCount,
-      deviceTokenRecord: deviceTokenRecord
-        ? {
-            searchCount: deviceTokenRecord.searchCount,
-            lastSearchAt: deviceTokenRecord.lastSearchAt,
-          }
-        : null,
-      ipLimitRecord: ipLimitRecord
-        ? {
-            searchCount: ipLimitRecord.searchCount,
-            lastSearchAt: ipLimitRecord.lastSearchAt,
-          }
-        : null,
-      maxFreeSearches: MAX_FREE_SEARCHES,
-      remaining: Math.max(0, MAX_FREE_SEARCHES - searchCount),
-    });
+    const debug = await getSearchLimitDebug(req);
+    res.json(debug);
   } catch (error) {
-    console.error("Error in debug endpoint:", error);
+    console.error("Error getting search limit debug:", error);
     res.status(500).json({ error: "Failed to get debug info" });
   }
 });
 
-// ============================================
-// TESTING ENDPOINT (Development Only)
-// ============================================
-// Quick reset endpoint for testing - only works in development
+// Reset search limits for testing (development only)
 // Usage: POST /api/search/reset-for-testing
 router.post("/search/reset-for-testing", async (req, res) => {
   // Only allow in development mode
@@ -602,19 +531,18 @@ router.post("/search/reset-for-testing", async (req, res) => {
   }
 
   try {
-    const [deviceResult, ipResult] = await Promise.all([
-      DeviceToken.updateMany(
-        {},
-        { $set: { searchCount: 0, lastSearchAt: null } }
-      ),
-      IPLimit.updateMany({}, { $set: { searchCount: 0, lastSearchAt: null } }),
-    ]);
+    // Import SearchLimit model
+    const { SearchLimit } = await import("../models/SearchLimit.js");
+
+    const result = await SearchLimit.updateMany(
+      {},
+      { $set: { searchCount: 0, lastSearchAt: null, linkedIdentifiers: [] } }
+    );
 
     res.json({
       success: true,
       message: "Reset all search limits for testing",
-      deviceTokensReset: deviceResult.modifiedCount,
-      ipLimitsReset: ipResult.modifiedCount,
+      recordsReset: result.modifiedCount,
       note: "This endpoint only works in development mode",
     });
   } catch (error) {

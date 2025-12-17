@@ -35,7 +35,12 @@ const researcherSchema = new mongoose.Schema(
 
 const profileSchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true, required: true },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      index: true,
+      required: true,
+    },
     role: { type: String, enum: ["patient", "researcher"], required: true },
     patient: patientSchema,
     researcher: researcherSchema,
@@ -43,6 +48,5 @@ const profileSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export const Profile = mongoose.models.Profile || mongoose.model("Profile", profileSchema);
-
-
+export const Profile =
+  mongoose.models.Profile || mongoose.model("Profile", profileSchema);

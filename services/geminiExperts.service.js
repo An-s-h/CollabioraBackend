@@ -150,7 +150,7 @@ export async function findResearchersWithGemini(query = "") {
     const result = await retryWithBackoff(async () => {
       return await model.generateContent(prompt, {
         generationConfig: {
-          maxOutputTokens: 1200, // Slightly higher for detail
+          maxOutputTokens: 3000, // Slightly higher for detail
           temperature: 0.3, // Lower for consistency and factual accuracy
           topP: 0.7,
           topK: 40,

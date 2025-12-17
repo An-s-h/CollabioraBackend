@@ -19,7 +19,7 @@ import meetingRequestsRoutes from "./routes/meeting-requests.routes.js";
 import connectionRequestsRoutes from "./routes/connection-requests.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import { optionalSession } from "./middleware/auth.js";
-import { getOrCreateDeviceToken } from "./middleware/deviceToken.js";
+import { searchLimitMiddleware } from "./middleware/searchLimit.js";
 
 dotenv.config();
 
@@ -62,9 +62,9 @@ app.get("/", (_req, res) => {
 });
 
 // Apply optional session middleware globally (for routes that need it)
-// Apply device token middleware globally (for anonymous users)
+// Apply search limit middleware globally (sets device token cookie for anonymous users)
 app.use(optionalSession);
-app.use(getOrCreateDeviceToken);
+app.use(searchLimitMiddleware);
 
 // TODO: mount routes here (session, profile, search, recommendations, favorites, forums, trials, ai)
 app.use("/api", sessionRoutes);
