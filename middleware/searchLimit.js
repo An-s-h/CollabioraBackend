@@ -3,14 +3,14 @@ import { SearchLimit } from "../models/SearchLimit.js";
 
 /**
  * RISK-SCORING BASED SEARCH LIMIT SYSTEM
- * 
+ *
  * Philosophy:
  * - No hard blocks for anonymous users
  * - Soft thresholds: warn → slow down → require action
  * - Fingerprint is a SIGNAL, not an ID (probabilistic)
- * - Time decay: old searches matter less 
+ * - Time decay: old searches matter less
  * - Transparent: clear messaging about limits
- * 
+ *
  * Risk Signals (weighted):
  * - Device Token (cookie): +3 weight (most reliable, user can clear)
  * - Signal Hash (coarse fingerprint): +2 weight (probabilistic match)
@@ -24,17 +24,17 @@ const DEVICE_ID_HEADER = "x-device-id";
 
 // Risk weights for different signals
 const RISK_WEIGHTS = {
-  deviceToken: 3,    // High confidence - user's explicit device
-  signalHash: 2,     // Medium confidence - probabilistic match
-  ip: 1,             // Low confidence - many false positives
+  deviceToken: 3, // High confidence - user's explicit device
+  signalHash: 2, // Medium confidence - probabilistic match
+  ip: 1, // Low confidence - many false positives
 };
 
 // Thresholds for different actions
 const THRESHOLDS = {
-  ALLOWED: 0,              // Free to search
-  WARNING: MAX_FREE_SEARCHES - 2,    // Show warning about remaining
-  SLOW_DOWN: MAX_FREE_SEARCHES - 1,  // Add slight delay
-  SOFT_LIMIT: MAX_FREE_SEARCHES,     // Suggest sign-up
+  ALLOWED: 0, // Free to search
+  WARNING: MAX_FREE_SEARCHES - 2, // Show warning about remaining
+  SLOW_DOWN: MAX_FREE_SEARCHES - 1, // Add slight delay
+  SOFT_LIMIT: MAX_FREE_SEARCHES, // Suggest sign-up
   HARD_LIMIT: MAX_FREE_SEARCHES + 2, // Actually block (with override option)
 };
 
@@ -57,7 +57,7 @@ export function hashString(str) {
  */
 export function getClientIP(req) {
   if (!req?.headers) return null;
-  
+
   // Check Vercel-specific header first
   if (req.headers["x-vercel-forwarded-for"]) {
     return req.headers["x-vercel-forwarded-for"].split(",")[0].trim();
@@ -76,7 +76,9 @@ export function getClientIP(req) {
     return req.headers["x-real-ip"];
   }
   // Fallback to connection remote address
-  return req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || null;
+  return (
+    req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || null
+  );
 }
 
 /**
@@ -91,10 +93,10 @@ function extractSignals(req) {
   // 1. Device Token from cookie (most reliable)
   const deviceToken = req.cookies?.device_token;
   if (deviceToken) {
-    signals.push({ 
-      id: deviceToken, 
-      type: "deviceToken", 
-      weight: RISK_WEIGHTS.deviceToken 
+    signals.push({
+      id: deviceToken,
+      type: "deviceToken",
+      weight: RISK_WEIGHTS.deviceToken,
     });
     raw.deviceToken = deviceToken.substring(0, 8) + "...";
   }
@@ -102,10 +104,10 @@ function extractSignals(req) {
   // 2. Device ID from header (localStorage-based, fallback to cookie)
   const deviceId = req.headers[DEVICE_ID_HEADER];
   if (deviceId && deviceId !== deviceToken) {
-    signals.push({ 
-      id: hashString(deviceId), 
-      type: "deviceToken", 
-      weight: RISK_WEIGHTS.deviceToken 
+    signals.push({
+      id: hashString(deviceId),
+      type: "deviceToken",
+      weight: RISK_WEIGHTS.deviceToken,
     });
     raw.deviceId = deviceId.substring(0, 8) + "...";
   }
@@ -113,10 +115,10 @@ function extractSignals(req) {
   // 3. Signal Hash (coarse browser fingerprint) - PROBABILISTIC
   const signalHash = req.headers[SIGNAL_HEADER];
   if (signalHash) {
-    signals.push({ 
-      id: signalHash, 
-      type: "signalHash", 
-      weight: RISK_WEIGHTS.signalHash 
+    signals.push({
+      id: signalHash,
+      type: "signalHash",
+      weight: RISK_WEIGHTS.signalHash,
     });
     raw.signalHash = signalHash;
   }
@@ -126,10 +128,10 @@ function extractSignals(req) {
   if (clientIP) {
     const hashedIP = hashString(clientIP);
     if (hashedIP) {
-      signals.push({ 
-        id: hashedIP, 
-        type: "ip", 
-        weight: RISK_WEIGHTS.ip 
+      signals.push({
+        id: hashedIP,
+        type: "ip",
+        weight: RISK_WEIGHTS.ip,
       });
       raw.ip = clientIP.substring(0, 10) + "...";
     }
@@ -145,8 +147,9 @@ function extractSignals(req) {
 function applyTimeDecay(searchCount, lastSearchAt) {
   if (!lastSearchAt) return searchCount;
 
-  const hoursSinceLastSearch = (Date.now() - new Date(lastSearchAt).getTime()) / (1000 * 60 * 60);
-  
+  const hoursSinceLastSearch =
+    (Date.now() - new Date(lastSearchAt).getTime()) / (1000 * 60 * 60);
+
   if (hoursSinceLastSearch > DECAY_HOURS * 7) {
     // After a week, reduce by 50%
     return Math.floor(searchCount * 0.5);
@@ -157,7 +160,7 @@ function applyTimeDecay(searchCount, lastSearchAt) {
     // After 24 hours, reduce by 10%
     return Math.floor(searchCount * 0.9);
   }
-  
+
   return searchCount;
 }
 
@@ -174,11 +177,14 @@ function calculateRiskScore(records, signals) {
 
   for (const record of records) {
     // Find the signal that matched this record
-    const matchingSignal = signals.find(s => s.id === record.identifier);
+    const matchingSignal = signals.find((s) => s.id === record.identifier);
     const weight = matchingSignal?.weight || 1;
 
     // Apply time decay
-    const decayedCount = applyTimeDecay(record.searchCount, record.lastSearchAt);
+    const decayedCount = applyTimeDecay(
+      record.searchCount,
+      record.lastSearchAt
+    );
 
     // Weighted contribution
     weightedCount += decayedCount * weight;
@@ -191,12 +197,11 @@ function calculateRiskScore(records, signals) {
   }
 
   // Normalized weighted count
-  const effectiveCount = totalWeight > 0 
-    ? Math.round(weightedCount / totalWeight) 
-    : highestCount;
+  const effectiveCount =
+    totalWeight > 0 ? Math.round(weightedCount / totalWeight) : highestCount;
 
-  return { 
-    score: effectiveCount, 
+  return {
+    score: effectiveCount,
     effectiveCount,
     highestRawCount: highestCount,
   };
@@ -211,7 +216,8 @@ function determineAction(score, highestRawCount) {
     return {
       action: "BLOCKED",
       canSearch: false,
-      message: "You've reached your free search limit. Sign up for unlimited searches.",
+      message:
+        "You've reached your free search limit. Sign up for unlimited searches.",
       showSignUpPrompt: true,
     };
   }
@@ -267,9 +273,9 @@ export async function checkSearchLimit(req) {
   // If no signals at all, allow but log
   if (signals.length === 0) {
     console.warn("[SearchLimit] No signals found for request");
-    return { 
-      canSearch: true, 
-      remaining: MAX_FREE_SEARCHES, 
+    return {
+      canSearch: true,
+      remaining: MAX_FREE_SEARCHES,
       action: "ALLOWED",
       signals: raw,
     };
@@ -285,13 +291,18 @@ export async function checkSearchLimit(req) {
     });
 
     // Calculate risk score
-    const { score, effectiveCount, highestRawCount } = calculateRiskScore(records, signals);
+    const { score, effectiveCount, highestRawCount } = calculateRiskScore(
+      records,
+      signals
+    );
     const remaining = Math.max(0, MAX_FREE_SEARCHES - effectiveCount);
     const action = determineAction(score, highestRawCount);
 
     // Debug logging
     if (process.env.NODE_ENV !== "production") {
-      console.log(`[SearchLimit] Check: signals=${signals.length}, score=${score}, remaining=${remaining}, action=${action.action}`);
+      console.log(
+        `[SearchLimit] Check: signals=${signals.length}, score=${score}, remaining=${remaining}, action=${action.action}`
+      );
     }
 
     return {
@@ -303,9 +314,9 @@ export async function checkSearchLimit(req) {
   } catch (error) {
     console.error("[SearchLimit] Error checking limit:", error);
     // Fail open - allow request if there's an error
-    return { 
-      canSearch: true, 
-      remaining: MAX_FREE_SEARCHES, 
+    return {
+      canSearch: true,
+      remaining: MAX_FREE_SEARCHES,
       action: "ERROR",
       signals: raw,
     };
@@ -315,6 +326,10 @@ export async function checkSearchLimit(req) {
 /**
  * Increment search count for all signals
  * Links signals together for cross-device tracking
+ *
+ * FIX: Increment each signal by 1 individually, instead of syncing all to max.
+ * This prevents the score from jumping multiple steps in a single search when
+ * new signals (with low counts) are present alongside old signals (with high counts).
  */
 export async function incrementSearchCount(req) {
   const { signals } = extractSignals(req);
@@ -325,44 +340,34 @@ export async function incrementSearchCount(req) {
   }
 
   try {
-    // Get current max count across all signals
-    const records = await SearchLimit.find({
-      $or: signals.map(({ id, type }) => ({
-        identifier: id,
-        identifierType: type,
-      })),
-    });
-
-    const currentMax = records.length > 0
-      ? Math.max(...records.map(r => r.searchCount))
-      : 0;
-
-    const newCount = currentMax + 1;
-
     // Get all signal IDs for linking
-    const allSignalIds = signals.map(s => s.id);
+    const allSignalIds = signals.map((s) => s.id);
 
-    // Update or create records for all signals with the SAME count
+    // Increment each signal's count by 1 individually (not sync to max)
+    // This ensures one search = +1 to the effective score
     const updatePromises = signals.map(({ id, type }) =>
       SearchLimit.findOneAndUpdate(
         { identifier: id, identifierType: type },
         {
-          $set: {
-            searchCount: newCount,
-            lastSearchAt: new Date(),
-          },
+          $inc: { searchCount: 1 }, // Increment by 1, not set to max
+          $set: { lastSearchAt: new Date() },
           $addToSet: {
-            linkedIdentifiers: { $each: allSignalIds.filter(i => i !== id) },
+            linkedIdentifiers: { $each: allSignalIds.filter((i) => i !== id) },
           },
         },
-        { upsert: true, new: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true }
       )
     );
 
-    await Promise.all(updatePromises);
+    const results = await Promise.all(updatePromises);
 
     if (process.env.NODE_ENV !== "production") {
-      console.log(`[SearchLimit] Incremented: ${signals.length} signals to count=${newCount}`);
+      const counts = results.map((r) => r.searchCount);
+      console.log(
+        `[SearchLimit] Incremented: ${
+          signals.length
+        } signals, counts=[${counts.join(",")}]`
+      );
     }
   } catch (error) {
     console.error("[SearchLimit] Error incrementing count:", error);
@@ -382,12 +387,15 @@ export async function getSearchLimitDebug(req) {
     })),
   }).lean();
 
-  const { score, effectiveCount, highestRawCount } = calculateRiskScore(records, signals);
+  const { score, effectiveCount, highestRawCount } = calculateRiskScore(
+    records,
+    signals
+  );
 
   return {
     signals: raw,
     signalCount: signals.length,
-    records: records.map(r => ({
+    records: records.map((r) => ({
       type: r.identifierType,
       count: r.searchCount,
       decayedCount: applyTimeDecay(r.searchCount, r.lastSearchAt),
@@ -409,7 +417,9 @@ export async function getSearchLimitDebug(req) {
 export function searchLimitMiddleware(req, res, next) {
   // Set device token cookie if not present
   if (!req.cookies?.device_token) {
-    const newToken = `dt_${Date.now().toString(36)}_${crypto.randomBytes(8).toString("hex")}`;
+    const newToken = `dt_${Date.now().toString(36)}_${crypto
+      .randomBytes(8)
+      .toString("hex")}`;
     res.cookie("device_token", newToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -418,7 +428,7 @@ export function searchLimitMiddleware(req, res, next) {
     });
     req.cookies = req.cookies || {};
     req.cookies.device_token = newToken;
-    
+
     if (process.env.NODE_ENV !== "production") {
       console.log("[DeviceToken] New cookie set");
     }
@@ -431,4 +441,4 @@ export function searchLimitMiddleware(req, res, next) {
   next();
 }
 
-export { MAX_FREE_SEARCHES }; 
+export { MAX_FREE_SEARCHES };

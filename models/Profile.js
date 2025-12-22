@@ -18,6 +18,16 @@ const patientSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const educationSchema = new mongoose.Schema(
+  {
+    institution: String,
+    degree: String,
+    field: String,
+    year: String,
+  },
+  { _id: false }
+);
+
 const researcherSchema = new mongoose.Schema(
   {
     specialties: [{ type: String }],
@@ -29,6 +39,12 @@ const researcherSchema = new mongoose.Schema(
     location: locationSchema,
     gender: String,
     isVerified: { type: Boolean, default: false },
+    // New fields for enhanced researcher profile
+    education: [educationSchema],
+    skills: [{ type: String }],
+    meetingRate: Number, // Rate per 30 minutes in USD
+    interestedInMeetings: { type: Boolean, default: false },
+    interestedInForums: { type: Boolean, default: false },
   },
   { _id: false }
 );
