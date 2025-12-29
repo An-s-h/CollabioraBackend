@@ -161,9 +161,9 @@ router.get("/recommendations/:userId", async (req, res) => {
       : [primaryTopic];
 
   // Fetch all data in parallel for better performance
-  // For trials, search with primary topic (API may not support OR queries well)
+  // For trials, search with primary topic and filter for RECRUITING status only
   const [trials, publications, globalExperts] = await Promise.all([
-    searchClinicalTrials({ q: primaryTopic, location: locationForTrials }),
+    searchClinicalTrials({ q: primaryTopic, location: locationForTrials, status: "RECRUITING" }),
     searchPubMed({ q: pubmedQuery }),
     // Fetch global experts using the same service as Experts.jsx
     findResearchersWithGemini(globalExpertsQuery).catch((error) => {

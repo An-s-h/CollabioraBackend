@@ -8,7 +8,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: false }, // Optional for OAuth users
     role: { type: String, enum: ["patient", "researcher"], default: "patient" },
     medicalInterests: [{ type: String }], // Conditions for patients, interests for researchers
-    
+
     // OAuth fields
     auth0Id: { type: String, sparse: true, index: true }, // Auth0 user ID (sub)
     oauthProvider: { type: String }, // google-oauth2, windowslive, etc.
