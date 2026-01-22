@@ -1,373 +1,237 @@
+import { IPLimit } from "../models/IPLimit.js";
+import { getClientIP } from "../utils/ipThrottle.js";
 import crypto from "crypto";
-import { SearchLimit } from "../models/SearchLimit.js";
+
+// Configuration - Strict limit of 6 searches per browser/device (hardcoded to ensure strictness)
+const MAX_FREE_SEARCHES = 6;
 
 /**
- * RISK-SCORING BASED SEARCH LIMIT SYSTEM
- *
- * Philosophy:
- * - No hard blocks for anonymous users
- * - Soft thresholds: warn → slow down → require action
- * - Fingerprint is a SIGNAL, not an ID (probabilistic)
- * - Time decay: old searches matter less
- * - Transparent: clear messaging about limits
- *
- * Risk Signals (weighted):
- * - Device Token (cookie): +3 weight (most reliable, user can clear)
- * - Signal Hash (coarse fingerprint): +2 weight (probabilistic match)
- * - IP Address: +1 weight (least reliable, shared IPs exist)
+ * Hash IP address for privacy (consistent with ipThrottle.js)
+ * Used as fallback when deviceId is not available
  */
-
-// Configuration
-const MAX_FREE_SEARCHES = parseInt(process.env.MAX_FREE_SEARCHES || "6", 10);
-const SIGNAL_HEADER = "x-client-signal";
-const DEVICE_ID_HEADER = "x-device-id";
-
-// Risk weights for different signals
-const RISK_WEIGHTS = {
-  deviceToken: 3, // High confidence - user's explicit device
-  signalHash: 2, // Medium confidence - probabilistic match
-  ip: 1, // Low confidence - many false positives
-};
-
-// Thresholds for different actions
-const THRESHOLDS = {
-  ALLOWED: 0, // Free to search
-  WARNING: MAX_FREE_SEARCHES - 2, // Show warning about remaining
-  SLOW_DOWN: MAX_FREE_SEARCHES - 1, // Add slight delay
-  SOFT_LIMIT: MAX_FREE_SEARCHES, // Suggest sign-up
-  HARD_LIMIT: MAX_FREE_SEARCHES + 2, // Actually block (with override option)
-};
-
-// Time decay: searches older than this are weighted less
-const DECAY_HOURS = 24;
-
-/**
- * Hash a string for privacy (one-way)
- */
-export function hashString(str) {
-  if (!str) return null;
-  const salt = process.env.HASH_SALT || "curalink-search-limit-salt";
+function hashIP(ip) {
+  if (!ip) return null;
+  const salt = process.env.IP_HASH_SALT || "curalink-ip-throttle-salt";
   const hash = crypto.createHash("sha256");
-  hash.update(str + salt);
+  hash.update(ip + salt);
   return hash.digest("hex").substring(0, 32);
 }
 
 /**
- * Extract client IP address from request
+ * Get device identifier from request
+ * Prioritizes browser-based deviceId (from x-device-id header)
+ * Falls back to hashed IP address for backward compatibility
  */
-export function getClientIP(req) {
-  if (!req?.headers) return null;
-
-  // Check Vercel-specific header first
-  if (req.headers["x-vercel-forwarded-for"]) {
-    return req.headers["x-vercel-forwarded-for"].split(",")[0].trim();
-  }
-  // Check Cloudflare
-  if (req.headers["cf-connecting-ip"]) {
-    return req.headers["cf-connecting-ip"];
-  }
-  // Check standard forwarded header
-  const forwardedFor = req.headers["x-forwarded-for"];
-  if (forwardedFor) {
-    return forwardedFor.split(",")[0].trim();
-  }
-  // Check real IP header
-  if (req.headers["x-real-ip"]) {
-    return req.headers["x-real-ip"];
-  }
-  // Fallback to connection remote address
-  return (
-    req.connection?.remoteAddress || req.socket?.remoteAddress || req.ip || null
-  );
-}
-
-/**
- * Extract all signals from request
- */
-function extractSignals(req) {
-  if (!req) return { signals: [], raw: {} };
-
-  const signals = [];
-  const raw = {};
-
-  // 1. Device Token from cookie (most reliable)
-  const deviceToken = req.cookies?.device_token;
-  if (deviceToken) {
-    signals.push({
-      id: deviceToken,
-      type: "deviceToken",
-      weight: RISK_WEIGHTS.deviceToken,
-    });
-    raw.deviceToken = deviceToken.substring(0, 8) + "...";
+function getDeviceIdentifier(req) {
+  // Primary: Browser-based device identifier (survives IP changes, proxies, browser restarts)
+  const deviceId = req.headers["x-device-id"];
+  if (deviceId && deviceId.trim()) {
+    return { type: "deviceId", value: deviceId.trim() };
   }
 
-  // 2. Device ID from header (localStorage-based, fallback to cookie)
-  const deviceId = req.headers[DEVICE_ID_HEADER];
-  if (deviceId && deviceId !== deviceToken) {
-    signals.push({
-      id: hashString(deviceId),
-      type: "deviceToken",
-      weight: RISK_WEIGHTS.deviceToken,
-    });
-    raw.deviceId = deviceId.substring(0, 8) + "...";
-  }
-
-  // 3. Signal Hash (coarse browser fingerprint) - PROBABILISTIC
-  const signalHash = req.headers[SIGNAL_HEADER];
-  if (signalHash) {
-    signals.push({
-      id: signalHash,
-      type: "signalHash",
-      weight: RISK_WEIGHTS.signalHash,
-    });
-    raw.signalHash = signalHash;
-  }
-
-  // 4. IP Address (fallback - least reliable)
+  // Fallback: IP-based identifier (for legacy support or when deviceId is unavailable)
   const clientIP = getClientIP(req);
   if (clientIP) {
-    const hashedIP = hashString(clientIP);
+    const hashedIP = hashIP(clientIP);
     if (hashedIP) {
-      signals.push({
-        id: hashedIP,
-        type: "ip",
-        weight: RISK_WEIGHTS.ip,
-      });
-      raw.ip = clientIP.substring(0, 10) + "...";
+      return { type: "hashedIP", value: hashedIP };
     }
   }
 
-  return { signals, raw };
+  return null;
 }
 
 /**
- * Calculate time-decayed count
- * Recent searches count more than old ones
+ * Check search limit for anonymous user (browser-based deviceId, fallback to IP)
+ * Returns strict limit check - blocks after 6 searches
  */
-function applyTimeDecay(searchCount, lastSearchAt) {
-  if (!lastSearchAt) return searchCount;
+export async function checkSearchLimit(req, res = null) {
+  // Get device identifier (deviceId preferred, IP as fallback)
+  const identifier = getDeviceIdentifier(req);
 
-  const hoursSinceLastSearch =
-    (Date.now() - new Date(lastSearchAt).getTime()) / (1000 * 60 * 60);
-
-  if (hoursSinceLastSearch > DECAY_HOURS * 7) {
-    // After a week, reduce by 50%
-    return Math.floor(searchCount * 0.5);
-  } else if (hoursSinceLastSearch > DECAY_HOURS * 3) {
-    // After 3 days, reduce by 25%
-    return Math.floor(searchCount * 0.75);
-  } else if (hoursSinceLastSearch > DECAY_HOURS) {
-    // After 24 hours, reduce by 10%
-    return Math.floor(searchCount * 0.9);
-  }
-
-  return searchCount;
-}
-
-/**
- * Calculate risk score from all matching records
- * Uses weighted signals, not just max count
- */
-function calculateRiskScore(records, signals) {
-  if (!records || records.length === 0) return { score: 0, effectiveCount: 0 };
-
-  let totalWeight = 0;
-  let weightedCount = 0;
-  let highestCount = 0;
-
-  for (const record of records) {
-    // Find the signal that matched this record
-    const matchingSignal = signals.find((s) => s.id === record.identifier);
-    const weight = matchingSignal?.weight || 1;
-
-    // Apply time decay
-    const decayedCount = applyTimeDecay(
-      record.searchCount,
-      record.lastSearchAt
+  if (!identifier) {
+    // If we can't get any identifier, block to be strict
+    console.warn(
+      "[SearchLimit] Failed to get device identifier - blocking request"
     );
-
-    // Weighted contribution
-    weightedCount += decayedCount * weight;
-    totalWeight += weight;
-
-    // Track highest raw count for hard limits
-    if (record.searchCount > highestCount) {
-      highestCount = record.searchCount;
-    }
-  }
-
-  // Normalized weighted count
-  const effectiveCount =
-    totalWeight > 0 ? Math.round(weightedCount / totalWeight) : highestCount;
-
-  return {
-    score: effectiveCount,
-    effectiveCount,
-    highestRawCount: highestCount,
-  };
-}
-
-/**
- * Determine action based on risk score
- */
-function determineAction(score, highestRawCount) {
-  // Hard limit uses raw count (no gaming the decay)
-  if (highestRawCount >= THRESHOLDS.HARD_LIMIT) {
     return {
-      action: "BLOCKED",
       canSearch: false,
-      message:
-        "You've reached your free search limit. Sign up for unlimited searches.",
+      remaining: 0,
+      action: "BLOCKED",
+      message: "Unable to verify request. Please try again.",
       showSignUpPrompt: true,
-    };
-  }
-
-  // Soft limit
-  if (score >= THRESHOLDS.SOFT_LIMIT) {
-    return {
-      action: "SOFT_LIMIT",
-      canSearch: true, // Still allowed but strongly encouraged to sign up
-      message: "You've used all your free searches. Sign up to continue.",
-      showSignUpPrompt: true,
-      addDelay: 1000, // 1 second delay
-    };
-  }
-
-  // Slow down
-  if (score >= THRESHOLDS.SLOW_DOWN) {
-    return {
-      action: "SLOW_DOWN",
-      canSearch: true,
-      message: "Last free search! Sign up for unlimited access.",
-      showSignUpPrompt: false,
-      addDelay: 500, // 0.5 second delay
-    };
-  }
-
-  // Warning
-  if (score >= THRESHOLDS.WARNING) {
-    return {
-      action: "WARNING",
-      canSearch: true,
-      message: `${THRESHOLDS.SOFT_LIMIT - score} free searches remaining`,
-      showSignUpPrompt: false,
-    };
-  }
-
-  // Fully allowed
-  return {
-    action: "ALLOWED",
-    canSearch: true,
-    message: null,
-    showSignUpPrompt: false,
-  };
-}
-
-/**
- * Check search limit for anonymous user
- * Returns risk assessment with soft thresholds
- */
-export async function checkSearchLimit(req) {
-  const { signals, raw } = extractSignals(req);
-
-  // If no signals at all, allow but log
-  if (signals.length === 0) {
-    console.warn("[SearchLimit] No signals found for request");
-    return {
-      canSearch: true,
-      remaining: MAX_FREE_SEARCHES,
-      action: "ALLOWED",
-      signals: raw,
     };
   }
 
   try {
-    // Find all records matching any signal
-    const records = await SearchLimit.find({
-      $or: signals.map(({ id, type }) => ({
-        identifier: id,
-        identifierType: type,
-      })),
-    });
+    // Find existing record by deviceId or hashedIP
+    let limitRecord = null;
+    if (identifier.type === "deviceId") {
+      // Primary: Look up by deviceId
+      limitRecord = await IPLimit.findOne({ deviceId: identifier.value });
 
-    // Calculate risk score
-    const { score, effectiveCount, highestRawCount } = calculateRiskScore(
-      records,
-      signals
-    );
-    const remaining = Math.max(0, MAX_FREE_SEARCHES - effectiveCount);
-    const action = determineAction(score, highestRawCount);
+      // Migration: If not found by deviceId, try hashedIP (for users upgrading from IP-based tracking)
+      if (!limitRecord) {
+        const clientIP = getClientIP(req);
+        if (clientIP) {
+          const hashedIP = hashIP(clientIP);
+          if (hashedIP) {
+            limitRecord = await IPLimit.findOne({ hashedIP });
+            // If found by IP, migrate to deviceId (preserve search count)
+            if (limitRecord) {
+              // Check if deviceId already exists (edge case - should be rare)
+              const existingByDeviceId = await IPLimit.findOne({
+                deviceId: identifier.value,
+              });
+              if (existingByDeviceId) {
+                // DeviceId record exists - use it and merge counts (take maximum)
+                existingByDeviceId.searchCount = Math.max(
+                  existingByDeviceId.searchCount || 0,
+                  limitRecord.searchCount || 0
+                );
+                await existingByDeviceId.save();
+                // Delete old IP-based record (save ID before reassigning)
+                const oldIpRecordId = limitRecord._id;
+                limitRecord = existingByDeviceId;
+                await IPLimit.deleteOne({ _id: oldIpRecordId });
+              } else {
+                // Migrate IP record to deviceId (preserve search count)
+                limitRecord.deviceId = identifier.value;
+                await limitRecord.save();
+              }
+            }
+          }
+        }
+      }
+    } else {
+      // Fallback: Look up by hashedIP only
+      limitRecord = await IPLimit.findOne({ hashedIP: identifier.value });
+    }
 
-    // Debug logging
+    let searchCount = 0;
+    if (limitRecord) {
+      searchCount = limitRecord.searchCount || 0;
+    } else {
+      // Create new record with count 0
+      const recordData = {
+        searchCount: 0,
+        lastSearchAt: null,
+      };
+
+      if (identifier.type === "deviceId") {
+        recordData.deviceId = identifier.value;
+      } else {
+        recordData.hashedIP = identifier.value;
+      }
+
+      limitRecord = await IPLimit.create(recordData);
+    }
+
+    const remaining = Math.max(0, MAX_FREE_SEARCHES - searchCount);
+
+    // Strict limit: block if searchCount >= MAX_FREE_SEARCHES (strict enforcement)
+    if (searchCount >= MAX_FREE_SEARCHES) {
+      if (process.env.NODE_ENV !== "production") {
+        const idDisplay =
+          identifier.type === "deviceId"
+            ? `deviceId=${identifier.value.substring(0, 12)}...`
+            : `hashedIP=${identifier.value.substring(0, 8)}...`;
+        console.log(
+          `[SearchLimit] BLOCKED: ${idDisplay}, count=${searchCount}, limit=${MAX_FREE_SEARCHES}`
+        );
+      }
+      return {
+        canSearch: false,
+        remaining: 0,
+        action: "BLOCKED",
+        message:
+          "You've reached your free search limit. Sign up for unlimited searches.",
+        showSignUpPrompt: true,
+        effectiveCount: searchCount,
+      };
+    }
+
+    // Allow search
     if (process.env.NODE_ENV !== "production") {
+      const idDisplay =
+        identifier.type === "deviceId"
+          ? `deviceId=${identifier.value.substring(0, 12)}...`
+          : `hashedIP=${identifier.value.substring(0, 8)}...`;
       console.log(
-        `[SearchLimit] Check: signals=${signals.length}, score=${score}, remaining=${remaining}, action=${action.action}`
+        `[SearchLimit] ALLOWED: ${idDisplay}, count=${searchCount}, remaining=${remaining}`
       );
     }
 
     return {
-      ...action,
+      canSearch: true,
       remaining,
-      effectiveCount,
-      signals: raw,
+      action: "ALLOWED",
+      message: remaining <= 2 ? `${remaining} free searches remaining` : null,
+      showSignUpPrompt: false,
+      effectiveCount: searchCount,
     };
   } catch (error) {
     console.error("[SearchLimit] Error checking limit:", error);
-    // Fail open - allow request if there's an error
+    // Fail closed - block request if there's an error (strict mode)
     return {
-      canSearch: true,
-      remaining: MAX_FREE_SEARCHES,
+      canSearch: false,
+      remaining: 0,
       action: "ERROR",
-      signals: raw,
+      message: "An error occurred. Please try again later.",
+      showSignUpPrompt: false,
     };
   }
 }
 
 /**
- * Increment search count for all signals
- * Links signals together for cross-device tracking
- *
- * FIX: Increment each signal by 1 individually, instead of syncing all to max.
- * This prevents the score from jumping multiple steps in a single search when
- * new signals (with low counts) are present alongside old signals (with high counts).
+ * Increment search count for device (deviceId preferred, IP as fallback)
  */
 export async function incrementSearchCount(req) {
-  const { signals } = extractSignals(req);
+  const identifier = getDeviceIdentifier(req);
 
-  if (signals.length === 0) {
-    console.warn("[SearchLimit] No signals to increment");
+  if (!identifier) {
+    console.warn("[SearchLimit] No device identifier to increment count for");
     return;
   }
 
   try {
-    // Get all signal IDs for linking
-    const allSignalIds = signals.map((s) => s.id);
+    // Build query based on identifier type
+    const query =
+      identifier.type === "deviceId"
+        ? { deviceId: identifier.value }
+        : { hashedIP: identifier.value };
 
-    // Increment each signal's count by 1 individually (not sync to max)
-    // This ensures one search = +1 to the effective score
-    const updatePromises = signals.map(({ id, type }) =>
-      SearchLimit.findOneAndUpdate(
-        { identifier: id, identifierType: type },
-        {
-          $inc: { searchCount: 1 }, // Increment by 1, not set to max
-          $set: { lastSearchAt: new Date() },
-          $addToSet: {
-            linkedIdentifiers: { $each: allSignalIds.filter((i) => i !== id) },
-          },
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      )
+    // Use atomic increment to prevent race conditions
+    const result = await IPLimit.findOneAndUpdate(
+      query,
+      {
+        $inc: { searchCount: 1 },
+        $set: { lastSearchAt: new Date() },
+        // Set deviceId if incrementing via IP and deviceId is available
+        ...(identifier.type === "hashedIP" && req.headers["x-device-id"]
+          ? { $setOnInsert: { deviceId: req.headers["x-device-id"].trim() } }
+          : {}),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    const results = await Promise.all(updatePromises);
+    // Double-check: if count exceeds limit after increment, don't allow it
+    if (result && result.searchCount > MAX_FREE_SEARCHES) {
+      // Rollback if somehow we exceeded the limit
+      await IPLimit.findOneAndUpdate(query, { $inc: { searchCount: -1 } });
+      const idDisplay =
+        identifier.type === "deviceId"
+          ? `deviceId: ${identifier.value.substring(0, 12)}...`
+          : `IP: ${identifier.value.substring(0, 8)}...`;
+      console.warn(`[SearchLimit] Prevented exceeding limit for ${idDisplay}`);
+    }
 
     if (process.env.NODE_ENV !== "production") {
-      const counts = results.map((r) => r.searchCount);
-      console.log(
-        `[SearchLimit] Incremented: ${
-          signals.length
-        } signals, counts=[${counts.join(",")}]`
-      );
+      const idDisplay =
+        identifier.type === "deviceId"
+          ? `deviceId: ${identifier.value.substring(0, 12)}...`
+          : `IP: ${identifier.value.substring(0, 8)}...`;
+      console.log(`[SearchLimit] Incremented search count for ${idDisplay}`);
     }
   } catch (error) {
     console.error("[SearchLimit] Error incrementing count:", error);
@@ -378,66 +242,53 @@ export async function incrementSearchCount(req) {
  * Get debug info for search limits
  */
 export async function getSearchLimitDebug(req) {
-  const { signals, raw } = extractSignals(req);
+  const identifier = getDeviceIdentifier(req);
 
-  const records = await SearchLimit.find({
-    $or: signals.map(({ id, type }) => ({
-      identifier: id,
-      identifierType: type,
-    })),
-  }).lean();
+  if (!identifier) {
+    return {
+      error: "No device identifier found (neither deviceId nor IP)",
+      identifier: null,
+    };
+  }
 
-  const { score, effectiveCount, highestRawCount } = calculateRiskScore(
-    records,
-    signals
-  );
+  // Build query based on identifier type
+  const query =
+    identifier.type === "deviceId"
+      ? { deviceId: identifier.value }
+      : { hashedIP: identifier.value };
 
-  return {
-    signals: raw,
-    signalCount: signals.length,
-    records: records.map((r) => ({
-      type: r.identifierType,
-      count: r.searchCount,
-      decayedCount: applyTimeDecay(r.searchCount, r.lastSearchAt),
-      lastSearch: r.lastSearchAt,
-      linkedCount: r.linkedIdentifiers?.length || 0,
-    })),
-    riskScore: score,
-    effectiveCount,
-    highestRawCount,
-    remaining: Math.max(0, MAX_FREE_SEARCHES - effectiveCount),
-    thresholds: THRESHOLDS,
+  const limitRecord = await IPLimit.findOne(query).lean();
+
+  const count = limitRecord?.searchCount || 0;
+  const remaining = Math.max(0, MAX_FREE_SEARCHES - count);
+
+  const clientIP = getClientIP(req);
+  const result = {
+    identifierType: identifier.type,
+    identifier:
+      identifier.type === "deviceId"
+        ? identifier.value.substring(0, 12) + "..."
+        : identifier.value.substring(0, 8) + "...",
+    searchCount: count,
+    remaining,
+    lastSearchAt: limitRecord?.lastSearchAt || null,
     maxFreeSearches: MAX_FREE_SEARCHES,
+    canSearch: count < MAX_FREE_SEARCHES,
   };
+
+  if (clientIP) {
+    result.clientIP = clientIP.substring(0, 8) + "...";
+  }
+
+  return result;
 }
 
 /**
- * Middleware to ensure device token cookie is set
+ * Middleware to ensure browser-based tracking is ready
+ * (No longer needs to set cookies, just passes through)
  */
 export function searchLimitMiddleware(req, res, next) {
-  // Set device token cookie if not present
-  if (!req.cookies?.device_token) {
-    const newToken = `dt_${Date.now().toString(36)}_${crypto
-      .randomBytes(8)
-      .toString("hex")}`;
-    res.cookie("device_token", newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 365, // 1 year
-    });
-    req.cookies = req.cookies || {};
-    req.cookies.device_token = newToken;
-
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[DeviceToken] New cookie set");
-    }
-  } else {
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[DeviceToken] Cookie received: YES");
-    }
-  }
-
+  // No-op middleware - device tracking happens in checkSearchLimit
   next();
 }
 
